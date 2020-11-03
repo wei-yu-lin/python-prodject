@@ -1,0 +1,5 @@
+order_id,buyer_ban,buyer_name,item_description,item_sequence_number,item_unit_price,item_quantity,item_amount
+AA001,53567686,雲端行動科技股份有限公司,電子發票服務費,1,1000,1,1000
+AA001,53567686,雲端行動科技股份有限公司,電子發票代辦費,2,2000,2,4000
+BB001,27934855,美商科高國際有限公司,系統使用費,1,500,1,500
+BB001,27934855,美商科高國際有限公司,系統開通費,2,300,2,600

@@ -10,16 +10,17 @@ class RdbToOracle:
     def __init__(self, conn, dataTable):
         self.conn = conn
         self.dataTable = dataTable
-        self.rp547b = "ecuser/ecuser@rp547b"
-        self.getRdbStruct()   #取得rdb資料結構為預設，為其他的def提供rdb的資料結構
+        self.rp547a = "tqc/tqc0213ora@rp547a"
+        self.getRdbStruct()  # 取得rdb資料結構為預設，為其他的def提供rdb的資料結構
+
     def oracle_CheckStruct(self):
         #檢查oracle資料表是否已建立
         try:
-            sqlstr = 'select count(*) from "python_'+self.dataTable+'"'
-            conn_rp547b = cx_Oracle.connect(self.rp547b)
-            cursor_rp547b = conn_rp547b.cursor()
-            cursor_rp547b.execute(sqlstr)
-            result_per = cursor_rp547b.fetchone()
+            sqlstr = 'select count(*) from "PYTHON_'+self.dataTable.upper()+'"'
+            conn_rp547a = cx_Oracle.connect(self.rp547a)
+            cursor_rp547a = conn_rp547a.cursor()
+            cursor_rp547a.execute(sqlstr)
+            result_per = cursor_rp547a.fetchone()
             if (result_per[0] >= 0):
                 print("有近來")
                 self.InsertOracleData()
@@ -30,12 +31,13 @@ class RdbToOracle:
             if 'ORA-00942' in x.message:
                 print("目前oracle資料表 python_"+self.dataTable+"沒創建，開始建立....")
                 self.oracle_CreatStruct()
-        conn_rp547b.close()
+        conn_rp547a.close()
 
     def oracle_CreatStruct(self):
         #在oracle中建立RDB的資料表
-        
-        create_sql = 'create table "ECUSER"."python_%s" (' % self.dataTable
+
+        create_sql = 'create table "TQC"."PYTHON_%s" (' % self.dataTable.upper(
+        )
         for index, row in self.struct.iterrows():
             create_sql += '"%s" ' % row['field_name'].strip()
             create_sql += '%s ' % row['type'].strip()
@@ -45,32 +47,35 @@ class RdbToOracle:
                 create_sql += "default '' ,"
         create_sql = create_sql[:-1]+")"
 
-        conn_rp547b = cx_Oracle.connect(self.rp547b)
-        cursor_rp547b = conn_rp547b.cursor()
+        conn_rp547a = cx_Oracle.connect(self.rp547a)
+        cursor_rp547a = conn_rp547a.cursor()
 
         try:
-            cursor_rp547b.execute(create_sql)
-            conn_rp547b.commit()
+            cursor_rp547a.execute(create_sql)
+            conn_rp547a.commit()
             print("create "+self.dataTable.upper()+"完成!")
             self.InsertOracleData()
         except:
             print("oracle建立資料表失敗")
-        conn_rp547b.close()
-        
+        conn_rp547a.close()
+
     def InsertOracleData(self):
         #撈取RDB資料表中的資料，並存入oracle中
-        insertsql = 'insert into ECUSER."python_%s" (' % self.dataTable
+        insertsql = 'insert into TQC."PYTHON_%s" (' % self.dataTable.upper()
         placeholder = "("
         idx = 1
         for datas in self.struct['field_name']:
-            insertsql += datas.strip()+","
+            if "LOCK" in datas and len(datas.strip()) == 4:
+                insertsql += '"'+datas.strip().lower()+'",'
+            else:
+                insertsql += datas.strip()+","
             placeholder += ":"+str(idx)+","
             idx += 1
         placeholder = placeholder[:-1] + ")"
-        insertsql = insertsql[:-1]+") VALUES " + placeholder #insert的語法
-        
+        insertsql = insertsql[:-1]+") VALUES " + placeholder  # insert的語法
+
         try:
-            sqlstr = "select * from %s " %self.dataTable
+            sqlstr = "select * from %s limit to 1000 rows" % self.dataTable
             cursor = self.conn.cursor()
             try:
                 tStart = time.time()
@@ -80,23 +85,26 @@ class RdbToOracle:
                 print("讀取資料總共耗時:%f 秒" % (tEnd-tStart))
             except cx_Oracle.DatabaseError as er:
                 print(er)
-            conn_rp547b = cx_Oracle.connect(self.rp547b)
-            cursor_rp547b = conn_rp547b.cursor()
+            
+            conn_rp547a = cx_Oracle.connect(self.rp547a)
+            cursor_rp547a = conn_rp547a.cursor()
             tStart = time.time()
-            cursor_rp547b.executemany(insertsql, row)
-            conn_rp547b.commit()
+            cursor_rp547a.executemany(insertsql, row)
+            conn_rp547a.commit()
             tEnd = time.time()
             print("寫入資料總共耗時:%f 秒" % (tEnd-tStart))
-            conn_rp547b.close()
+            conn_rp547a.close()
         except cx_Oracle.DatabaseError as er:
-            print("查無資料R" , er)
+            print("查無資料R", er)
+
     def getRdbStruct(self):
         sqlstr = "SELECT rdb$field_name,"
         sqlstr += "(select UTIL_GET_DTYPE(RDB$FIELD_TYPE,RDB$FIELD_SCALE,RDB$FIELD_LENGTH, RDB$SEGMENT_LENGTH, RDB$FIELD_SUB_TYPE) "
         sqlstr += "from RDB$FIELDS where RDB$FIELD_NAME = rdb$relation_fields.RDB$FIELD_source)"
-        sqlstr += "from rdb$relation_fields where rdb$relation_name ='CCAP210M'"
+        sqlstr += "from rdb$relation_fields where rdb$relation_name = '%s'" % self.dataTable.upper()
         struct = pd.read_sql(sqlstr, self.conn)
-        struct.rename(columns={"RDB$FIELD_NAME": "field_name", "": "type"}, inplace=True)
+        struct.rename(
+            columns={"RDB$FIELD_NAME": "field_name", "": "type"}, inplace=True)
         self.struct = struct
 
 

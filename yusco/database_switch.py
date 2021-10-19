@@ -16,27 +16,25 @@ def checkRdbTable(ps, db):
     PASSWORD = data[s_db]['pwd']
     try:
         conn = pyodbc.connect(
-            r'DSN=RDB'+db+ps[:-1]+';UID=' + USER_ID + ';PWD=' + PASSWORD)
-        conn.setencoding(encoding='Big5')
+            r'DSN=RDB'+db+ps[:-1]+';UID=' + USER_ID + ';PWD=' + PASSWORD)        
         return conn
     except:
         print("輸入錯誤的資料")
 
 
-def getRdbData(dataCount, dataTable, conn):
-    if (dataCount == -1 or dataCount == 0):
-        sqlstr = "select * from %s " % dataTable.upper()
+def getRdbData( dataTable, conn):
+    sqlstr = "select * from %s" % dataTable.upper()
+    cursor = conn.cursor()
+    try:
+        tStart = time.time()
+        cursor.execute(sqlstr)
+        row = cursor.fetchall()
         
-        cursor = conn.cursor()
-        try:
-            tStart = time.time()
-            cursor.execute(sqlstr)
-            row = cursor.fetchall()
-            tEnd = time.time()
-            print("讀取資料總共花時:%f 秒" % (tEnd-tStart))
-            return row
-        except cx_Oracle.DatabaseError as er:
-            print(er)
+        tEnd = time.time()
+        print("讀取資料總共花時:%f 秒" % (tEnd-tStart))
+        return row
+    except cx_Oracle.DatabaseError as er:
+        print(er)
         
 
 def check_contain_chinese(check_str, big5_Struct):
@@ -44,17 +42,22 @@ def check_contain_chinese(check_str, big5_Struct):
     #因為utf8的中文大小是big5的1.5倍 
     reg = re.compile(r'[0-9]+')
     filter_type = {}
+    data = []
     for i in check_str:
         big5_Struct['newWave'] = list(i)
+        data.append([x for x in i])   
         get_chinese_type = big5_Struct.loc[big5_Struct.iloc[:,2].str.contains(u'[\u4e00-\u9fa5]+', na=False),'type'] #有中文的欄位
         ggg = get_chinese_type.to_dict()
         val1 = [x for x in filter_type.keys()]
+        
         for (k,v) in ggg.items():
             if k not in val1:
                 filter_type.update({k:v})
                 big5_NumType = reg.search(v)
                 utf8_DataType = math.ceil(int(big5_NumType.group(0))*1.5)
                 big5_Struct.loc[k,'type'] = "CHAR ("+str(utf8_DataType)+")"
+        # with open('news.txt','w+') as f:
+        #     f.write(str(data))
     return big5_Struct.drop(columns='newWave')
 
 
@@ -64,34 +67,38 @@ class RdbToOracle:
     def __init__(self, conn, dataTable):
         self.conn = conn
         self.dataTable = dataTable
-        self.rp547b = "YUPCM/YUPCM@rp547b"
+        self.rp547b = "YUCPSSYS/CPS65426@rp547b"
         self.getRdbStruct()   #取得rdb資料結構為預設，為其他的def提供rdb的資料結構
     def oracle_CheckStruct(self):
         #檢查oracle資料表是否已建立.
-        self.row = getRdbData(-1, self.dataTable, self.conn)
-        checked_struct = check_contain_chinese(self.row, self.struct)
-        if (checked_struct.any == True):
-            self.struct['type'] = checked_struct
         try:
-            sqlstr = 'select count(*) from "YUPCM"."'+self.dataTable.upper()+'"'
+            sqlstr = 'select count(*) from "YUCPSSYS"."'+self.dataTable.upper()+'"'
             conn_rp547b = cx_Oracle.connect(self.rp547b)
             cursor_rp547b = conn_rp547b.cursor()
             cursor_rp547b.execute(sqlstr)
             result_per = cursor_rp547b.fetchone()
             if (result_per[0] == 0):
-                self.InsertOracleData(result_per[0])
+                self.row = getRdbData( self.dataTable, self.conn)
+                self.InsertOracleData()
+            else:
+                print("請清空資料表"+self.dataTable + str(result_per[0]))
+                return
         except cx_Oracle.DatabaseError as er:
-            print("oracle資料表"+self.dataTable+"有錯誤=")
             x = er.args[0]
-            print(x.message+"\n")
+            print(x.message)
             if 'ORA-00942' in x.message:
                 print("目前oracle資料表 "+self.dataTable+"沒創建，開始建立....")
+                self.row = getRdbData( self.dataTable, self.conn)
+                checked_struct = check_contain_chinese(self.row, self.struct)
+                if (checked_struct.any == True):
+                    self.struct['type'] = checked_struct
                 self.oracle_CreatStruct()
+                self.InsertOracleData()
         conn_rp547b.close()
 
     def oracle_CreatStruct(self):
         #在oracle中建立RDB的資料表
-        create_sql = 'create table "YUPCM"."%s" (' % self.dataTable.upper()
+        create_sql = 'create table "YUCPSSYS"."%s" (' % self.dataTable.upper()
         for index, row in self.struct.iterrows():
             if "LOCK" in row['field_name'] and len(row['field_name'].strip()) == 4:
                 create_sql += '"lock" '
@@ -99,8 +106,14 @@ class RdbToOracle:
                 create_sql += '"%s" ' % row['field_name'].strip()
             if "DATE VMS" in row['type']:
                 create_sql += 'DATE '
-            elif "TINYINT" in row['type']:
-                create_sql += 'SMALLINT '
+            elif "TINYINT" in row['type'] or "SMALLINT" in row['type']:
+                create_sql += 'NUMBER(5,0) '
+            elif "BIGINT" in row['type']:
+                create_sql += 'NUMBER(20,0) '
+            elif "CHAR" in row['type']:
+                create_sql += row['type'].replace("CHAR","VARCHAR2")+' '
+            elif "INTEGER" in row['type']:
+                create_sql += 'NUMBER(10,0) '
             else:
                 create_sql += '%s ' % row['type'].strip()
             if "REAL" in row['type']:
@@ -120,12 +133,14 @@ class RdbToOracle:
         except pyodbc.Error as ex:
             sqlstate = ex.args[0]
             print("sqlstate=",sqlstate)
-        self.InsertOracleData(-1)
+        
         conn_rp547b.close()
         
-    def InsertOracleData(self, dataCount):
+    def InsertOracleData(self):
+        
+        
         #撈取RDB資料表中的資料，並存入oracle中
-        insertsql = 'insert into "YUPCM"."%s" (' % self.dataTable.upper()
+        insertsql = 'insert into "YUCPSSYS"."%s" (' % self.dataTable.upper()
         placeholder = "("
         idx = 1
         for datas in self.struct['field_name']:

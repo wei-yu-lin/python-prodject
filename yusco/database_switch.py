@@ -2,6 +2,7 @@ import pyodbc
 import pandas as pd
 import json
 import time
+import math
 import cx_Oracle
 import math
 import re
@@ -24,12 +25,11 @@ def checkRdbTable(ps, db):
 
 def getRdbData( dataTable, conn):
     sqlstr = "select * from %s" % dataTable.upper()
-    cursor = conn.cursor()
     try:
         tStart = time.time()
-        cursor.execute(sqlstr)
-        row = cursor.fetchall()
-        
+        row = pd.read_sql_query(sqlstr,conn)
+        df_dtype = row.select_dtypes(['object'])
+        row[df_dtype.columns] = df_dtype.apply(lambda x:x.str.strip())
         tEnd = time.time()
         print("讀取資料總共花時:%f 秒" % (tEnd-tStart))
         return row
@@ -67,12 +67,12 @@ class RdbToOracle:
     def __init__(self, conn, dataTable):
         self.conn = conn
         self.dataTable = dataTable
-        self.rp547b = "YUCPSSYS/CPS65426@rp547b"
+        self.rp547b = "YUPCMSYS/PCM62440@rp547b"
         self.getRdbStruct()   #取得rdb資料結構為預設，為其他的def提供rdb的資料結構
     def oracle_CheckStruct(self):
         #檢查oracle資料表是否已建立.
         try:
-            sqlstr = 'select count(*) from "YUCPSSYS"."'+self.dataTable.upper()+'"'
+            sqlstr = 'select count(*) from "YUPCMSYS"."'+self.dataTable.upper()+'"'
             conn_rp547b = cx_Oracle.connect(self.rp547b)
             cursor_rp547b = conn_rp547b.cursor()
             cursor_rp547b.execute(sqlstr)
@@ -98,7 +98,7 @@ class RdbToOracle:
 
     def oracle_CreatStruct(self):
         #在oracle中建立RDB的資料表
-        create_sql = 'create table "YUCPSSYS"."%s" (' % self.dataTable.upper()
+        create_sql = 'create table "YUPCMSYS"."%s" (' % self.dataTable.upper()
         for index, row in self.struct.iterrows():
             if "LOCK" in row['field_name'] and len(row['field_name'].strip()) == 4:
                 create_sql += '"lock" '
@@ -140,7 +140,7 @@ class RdbToOracle:
         
         
         #撈取RDB資料表中的資料，並存入oracle中
-        insertsql = 'insert into "YUCPSSYS"."%s" (' % self.dataTable.upper()
+        insertsql = 'insert into "YUPCMSYS"."%s" (' % self.dataTable.upper()
         placeholder = "("
         idx = 1
         for datas in self.struct['field_name']:
@@ -156,10 +156,21 @@ class RdbToOracle:
             
             conn_rp547b = cx_Oracle.connect(self.rp547b)
             cursor_rp547b = conn_rp547b.cursor()
-            # child_id_var = cursor_rp547b.var(int, arraysize=len(self.row))
-            cursor_rp547b.setinputsizes(None, 20)
+            num_bytes_in_chunk = 100000
+            rowLength = len(self.row.values.tolist())
             tStart = time.time()
-            cursor_rp547b.executemany(insertsql, self.row)
+            # print("資料長度=",str(rowLength)+" 相除=",str(math.ceil(rowLength/num_bytes_in_chunk)))
+            for i in range(math.ceil(rowLength/num_bytes_in_chunk)):
+                if(i==0):
+                    cursor_rp547b.executemany(insertsql, self.row.values.tolist()[1:num_bytes_in_chunk])
+                    # print('第一',"1:"+str(num_bytes_in_chunk))
+                elif(i == (math.ceil(rowLength/num_bytes_in_chunk)-1) ):
+                    cursor_rp547b.executemany(insertsql, self.row.values.tolist()[num_bytes_in_chunk*i:-1])
+                    # print('第三',str(num_bytes_in_chunk*i)+":"+str(rowLength))
+                else:
+                    cursor_rp547b.executemany(insertsql, self.row.values.tolist()[num_bytes_in_chunk*i:num_bytes_in_chunk*(i+1)])
+                    # print('第二',str(num_bytes_in_chunk*i)+":"+str(num_bytes_in_chunk*(i+1)))
+
             conn_rp547b.commit()
             tEnd = time.time()
             print("寫入資料總共花時:%f 秒" % (tEnd-tStart))
